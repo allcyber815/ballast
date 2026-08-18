@@ -1,0 +1,19 @@
+{
+  "description": "ballast standing-rule delivery for Codex",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/scripts/ballast-rules.mjs\"",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\hooks\\scripts\\ballast-rules.mjs\"",
+            "timeout": 10,
+            "additionalContextLimit": 0,
+            "statusMessage": "Applying ballast rules"
+          }
+        ]
+      }
+    ]
+  }
+}
