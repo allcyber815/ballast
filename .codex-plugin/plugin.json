@@ -1,0 +1,7 @@
+{
+  "name": "ballast",
+  "version": "0.8.0",
+  "description": "Builds up to a goal in a field you have no expertise in: mobilizes what you already hold, learns what is missing, preserves verified knowledge and decisions, and injects matching standing rules before each prompt.",
+  "skills": "./skills/",
+  "hooks": "./hooks/codex-hooks.json"
+}
