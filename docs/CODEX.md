@@ -1,24 +1,81 @@
 # Using ballast with Codex
 
-ballast takes a goal in a field you have no expertise in and builds up to it: it splits the goal into the foundations it actually needs, mobilizes the ones you already hold, learns the ones you are missing, and leaves every path it solves behind — as a rule, a verified note, or a skill the next goal starts from. Nothing is called done until a check passes.
+ballast is packaged for both Claude Code and Codex. The twelve skills and file-based memory conventions are shared; Codex also gets standing-rule delivery through its native `UserPromptSubmit` lifecycle hook.
 
-It is packaged as a Claude Code plugin, but twelve of its thirteen pieces are plain markdown conventions — files any capable agent can read. This guide wires them into Codex CLI.
+## What carries over
 
-**What carries over:** all twelve skills (`SKILL.md` is plain markdown — Codex is simply told to read it), the `memory/` conventions, and the config files. One rule catalog can serve both tools on the same project.
+- all twelve `skills/*/SKILL.md` workflows
+- the `memory/` conventions and project files
+- `.claude/ballast.rules.json` and `~/.claude/ballast.rules.json`
+- the same `hooks/scripts/ballast-rules.mjs` rule engine
+- `action: "block"` rules before the prompt reaches the model
 
-**What does not (in interactive sessions):** the rules hook. Codex is growing a lifecycle-hook system with the same wire format ballast already speaks — it exists in openai/codex main — but released CLIs do not load user hook configs yet (checked through codex-cli 0.147.0, 2026-08-17). So in interactive Codex sessions, rule delivery is a convention.
+One rule catalog can therefore serve Claude Code and Codex on the same project.
 
-**What ballast adds for `codex exec`:** a bundled wrapper that runs the same rule engine before Codex sees your prompt — real delivery, and `block` rules actually refuse. See [Rule delivery on codex exec](#rule-delivery-on-codex-exec) below. The moment Codex ships user-config hooks, the hook itself plugs in unchanged — same `UserPromptSubmit` event, same JSON shape.
+## Native Codex plugin
 
-## Setup
+This fork includes a Codex plugin manifest at `.codex-plugin/plugin.json`. It exposes `./skills/` and points Codex at `hooks/codex-hooks.json`.
 
-1. Clone this repo somewhere stable:
+The Codex hook runs on every `UserPromptSubmit` and invokes the same Node rule engine used by Claude Code. Matching rules are returned as `hookSpecificOutput.additionalContext`; a matching `action: "block"` rule exits with status 2 and stops the prompt.
 
+The hook resolves the installed plugin through `PLUGIN_ROOT`, so it does not hard-code a clone path.
+
+### Install
+
+Clone this fork somewhere stable:
+
+```bash
+git clone https://github.com/allcyber815/ballast
 ```
-git clone https://github.com/svy04/ballast
+
+Then use the plugin installation flow supported by your installed Codex version to install the local repository. Check `codex --help` and the plugin-related help first rather than assuming an older command syntax.
+
+Before enabling the bundled hook, review these files:
+
+```text
+.codex-plugin/plugin.json
+hooks/codex-hooks.json
+hooks/scripts/ballast-rules.mjs
 ```
 
-2. Append this block to your project's `AGENTS.md`, replacing `<BALLAST>` with the clone path. (AGENTS.md gets committed — if your clone path is personal, put the block in `~/.codex/AGENTS.md` instead; Codex reads both.)
+The hook script uses Node built-ins only and reads the local rule catalogs. Review/trust the hook when Codex asks before enabling it.
+
+If your Codex build does not support native plugin installation but does support hooks, use the manual setup below.
+
+## Seed the rule catalog
+
+The plugin is quiet until a catalog exists.
+
+Project rules live at:
+
+```text
+<project>/.claude/ballast.rules.json
+```
+
+User-wide rules live at:
+
+```text
+~/.claude/ballast.rules.json
+```
+
+Do not overwrite an existing catalog. If you want to start empty, use:
+
+```json
+{
+  "version": 1,
+  "rules": []
+}
+```
+
+The example catalog at `rules/ballast.rules.example.json` is for reference and smoke testing; prune it before treating it as your real policy.
+
+Project rules override user rules with the same `id`. Matching uses case-insensitive literal keywords plus optional regex patterns. `action: "block"` stops matching prompts.
+
+## Manual Codex setup without plugin installation
+
+The skills can still be referenced from `AGENTS.md` while the rule engine is wired directly as a repo-local Codex hook.
+
+Append this block to the project `AGENTS.md`, replacing `<BALLAST>` with the clone path:
 
 ```markdown
 ## ballast conventions
@@ -31,39 +88,31 @@ goal (big or unfamiliar goals) · verify-gate (claims, labels) · knowledge-base
 · checkpoint (pause and return) · pin (corrections become rules) · brain-init
 (memory setup) · skill-forge (repeated procedures). Folder names match these
 skill names.
-
-Standing rules: at the start of every task, read .claude/ballast.rules.json
-(project) and ~/.claude/ballast.rules.json (user) if present. Honor every rule
-whose keywords or patterns match the task. Treat action:"block" rules as a
-refusal, quoting the rule as the reason. This delivery is a convention —
-nothing enforces it here.
 ```
 
-3. Seed the rule catalog. It is not in the clone's `.claude/` — you create it: copy `<BALLAST>/rules/ballast.rules.example.json` to `<project>/.claude/ballast.rules.json` and prune it. The rule format (keywords, patterns, `action: "block"`) is documented in the README under [Write the catalog by hand](../README.md#write-the-catalog-by-hand).
+For native rule delivery, create `<project>/.codex/hooks.json` with the hook shape supported by the installed Codex version and point its `UserPromptSubmit` command at:
 
-4. Optional: the second-model configs (`.claude/ballast.verifier.json`, `.claude/ballast.researcher.json`) are read by the verify-gate and researcher skills, not by any hook — the one-line file format is in the README's [Know the limits](../README.md#know-the-limits). `memory/` appears in your project root once you run brain-init (wrapper below).
-
-## Rule delivery on codex exec
-
-`hooks/scripts/ballast-codex.mjs` wraps `codex exec`. It runs the ballast rule engine on your prompt, prepends every matching rule's full text, honors `action: "block"` (refuses and shows the rule as the reason, exit 2), then hands off to Codex:
-
+```text
+node "<BALLAST>/hooks/scripts/ballast-rules.mjs"
 ```
+
+The bundled `hooks/codex-hooks.json` is the reference configuration used by the plugin package.
+
+## Legacy `codex exec` wrapper
+
+`hooks/scripts/ballast-codex.mjs` remains available as a compatibility path for environments where native hooks are disabled or unavailable:
+
+```bash
 node <BALLAST>/hooks/scripts/ballast-codex.mjs "generate 40 images" -- -C /path/to/project
 ```
 
-Everything after `--` goes to `codex exec` unchanged. Set `CODEX_BIN` if `codex` is not on your PATH. A convenient alias:
+Everything after `--` goes to `codex exec` unchanged. Set `CODEX_BIN` if `codex` is not on your `PATH`.
 
-```
-alias bcodex='node <BALLAST>/hooks/scripts/ballast-codex.mjs'
-```
-
-Verified live (2026-08-17, codex-cli 0.130): a `generate` prompt arrived with the cost-gate rule attached, and Codex opened with an estimate and a request for approval; a `block` rule stopped the run before Codex was invoked. Same contract as the hook — zero dependencies, and if the rule step fails, the prompt goes through without rules and you get one line on stderr.
-
-Interactive sessions are the remaining convention-only surface: the AGENTS.md block above asks Codex to read the catalog at task start, and nothing enforces it there.
+With native Codex hook support this wrapper is a fallback, not the primary setup.
 
 ## Invoking skills directly
 
-Codex custom prompts give you slash-style invocation. Create `~/.codex/prompts/ballast-goal.md`:
+If you want an explicit shortcut in addition to automatic skill matching, create a Codex prompt such as `~/.codex/prompts/ballast-goal.md`:
 
 ```markdown
 ---
@@ -75,11 +124,26 @@ Read <BALLAST>/skills/goal/SKILL.md and follow it exactly.
 Task: $ARGUMENTS
 ```
 
-One wrapper file per skill you call often — `ballast-brain-init.md`, `ballast-pin.md`, same pattern.
+Use the same pattern for `ballast-brain-init.md`, `ballast-pin.md`, or other skills you call often.
 
-## Know the limits
+## Operational notes
 
-- **No enforcement.** On Claude Code the hook delivers matching rules whether the model cooperates or not; on Codex the AGENTS.md block asks, and Codex complies as well as it follows any instruction. Blocks are a stated refusal, not a stopped prompt.
-- **The hook's mechanics don't exist here.** No substring matching, no 12-rule / ~6,000-char cap, no `BALLAST_DISABLE` / `BALLAST_DEBUG`: matching is the model's judgment, and the whole catalog gets read each task — keep it lean.
-- **Delivery timing differs.** The hook injects per message; AGENTS.md is read per session. A long Codex session can drift from the catalog like any instruction file — re-point it at the block when it does.
-- **The evidence is `observed`, not a harness.** 2026-08-16, Codex CLI 0.130, `codex exec`, one session each: given the block above plus the example catalog, Codex presented an estimate and asked approval before a spending task, and read and followed the rehearsal and verify-gate skills unprompted — labels included. Both sessions ran with a non-default model and service-tier override, not the CLI's stock config — instruction-following varies by model. Two sessions is an observation, not a rate. The runnable 6-case harness exists only for the Claude Code hook.
+- **Hook trust is explicit.** Review the command and script before trusting plugin-bundled hooks.
+- **Hooks may be disabled.** A workspace or administrator can disable lifecycle hooks; use the wrapper fallback if needed.
+- **The rule engine is fail-open on its own errors.** A malformed internal state does not intentionally break the agent session. A malformed catalog is surfaced because silently losing user-authored rules would be misleading.
+- **Catalogs should stay lean.** The rule engine caps injected matches at 12 rules / roughly 6,000 characters.
+- **Node 18+ is expected.** The hook imports only Node built-ins (`fs`, `os`, `path`) and makes no network requests.
+- **The hook is a guardrail, not a security sandbox.** Use Codex permissions and sandboxing for hard security boundaries.
+
+## Verify locally
+
+Run both zero-dependency harnesses:
+
+```bash
+node hooks/scripts/verify-hook.mjs
+node hooks/scripts/verify-codex-package.mjs
+```
+
+The original harness covers keyword injection, silent no-match behavior, blocking, legacy prompt-field compatibility, malformed-catalog reporting, and fail-open behavior.
+
+The Codex harness additionally parses the plugin manifest and Codex hook config, then simulates Codex-style `UserPromptSubmit` injection and blocking.
